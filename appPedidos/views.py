@@ -17,9 +17,9 @@ def monitor(request):
     return render(request, 'monitor.html')
 
 def notificar_modulo3_pedido_listo(pedido: Pedido):
-    """ Se envía una notificacion al Módulo 3 cuando el pedido pasa a LISTO.
-    
-    Se Envía:
+    """
+    Envía un callback al Módulo 3 cuando el pedido pasa a LISTO.
+    Envía:
 
     - id del pedido
     - mesa
@@ -27,12 +27,12 @@ def notificar_modulo3_pedido_listo(pedido: Pedido):
     - orden (descripcion)
     - fecha de creación
     - estado (LISTO)
-    - hora en la que llegó a LISTO """
-
-
+    - hora en la que llegó a LISTO (fecha_actualizacion)
+    
+    """
     url = getattr(settings, "MODULO3_WEBHOOK_URL", None)
     if not url:
-        # Si no hay URL configurada, no hacemos nada
+        print("[MÓDULO 4] MODULO3_WEBHOOK_URL no está configurada.")
         return
 
     payload = {
@@ -45,11 +45,18 @@ def notificar_modulo3_pedido_listo(pedido: Pedido):
         "hora_listo": pedido.fecha_actualizacion.isoformat() if pedido.fecha_actualizacion else None,
     }
 
+    print("\n[MÓDULO 4] Enviando datos al Módulo 3 (pedido LISTO):")
+    print("URL destino:", url)
+    print("Payload:", payload)
+
     try:
-        requests.post(url, json=payload, timeout=5)
+        resp = requests.post(url, json=payload, timeout=5)
+        print("[MÓDULO 4] Respuesta del Módulo 3:")
+        print("  Status code:", resp.status_code)
+        print("  Body:", resp.text)
     except Exception as e:
-        # En un sistema real, aquí se podría registrar en logs.
-        print(f"[MÓDULO 4] Error notificando al Módulo 3: {e}")
+        print("[MÓDULO 4] Error notificando al Módulo 3:", e)
+
 
 
 class PedidoViewSet(viewsets.ModelViewSet):
