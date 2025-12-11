@@ -8,9 +8,48 @@ from .serializers import PedidoSerializer
 from django.shortcuts import render
 from django.db.models import Q
 from django import forms
+import requests
+from django.conf import settings
+from rest_framework.decorators import api_view
+
 
 def monitor(request):
     return render(request, 'monitor.html')
+
+def notificar_modulo3_pedido_listo(pedido: Pedido):
+    """ Se envía una notificacion al Módulo 3 cuando el pedido pasa a LISTO.
+    
+    Se Envía:
+
+    - id del pedido
+    - mesa
+    - cliente
+    - orden (descripcion)
+    - fecha de creación
+    - estado (LISTO)
+    - hora en la que llegó a LISTO """
+
+
+    url = getattr(settings, "MODULO3_WEBHOOK_URL", None)
+    if not url:
+        # Si no hay URL configurada, no hacemos nada
+        return
+
+    payload = {
+        "id_pedido": pedido.id,
+        "mesa": pedido.mesa,
+        "cliente": pedido.cliente,
+        "orden": pedido.descripcion,
+        "fecha_creacion": pedido.fecha_creacion.isoformat() if pedido.fecha_creacion else None,
+        "estado": "LISTO",
+        "hora_listo": pedido.fecha_actualizacion.isoformat() if pedido.fecha_actualizacion else None,
+    }
+
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        # En un sistema real, aquí se podría registrar en logs.
+        print(f"[MÓDULO 4] Error notificando al Módulo 3: {e}")
 
 
 class PedidoViewSet(viewsets.ModelViewSet):
@@ -27,25 +66,37 @@ class PedidoViewSet(viewsets.ModelViewSet):
         "ENTREGADO": []
     }
 
-    # ---- UPDATE ----
     def update(self, request, *args, **kwargs):
+        """
+        Sobrescribe update para:
+        - Validar transiciones de estado
+        - Y cuando el estado cambie a LISTO, notificar al Módulo 3.
+        """
         instance = self.get_object()
+        estado_anterior = instance.estado
         nuevo_estado = request.data.get("estado", None)
 
-        # Si solo actualiza mesa, cliente o descripcion:
+        # Si no se manda "estado" en el body, dejamos que DRF maneje el update normal
         if nuevo_estado is None:
             return super().update(request, *args, **kwargs)
 
-        # Si intenta cambiar estado
-        if nuevo_estado not in self.transiciones[instance.estado]:
+        # Validar transición
+        if nuevo_estado not in self.transiciones.get(instance.estado, []):
             return Response(
                 {"error": f"No puedes pasar de {instance.estado} a {nuevo_estado}."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Actualizamos el estado
         instance.estado = nuevo_estado
         instance.save()
+
+        # Si ahora quedó LISTO y antes no lo estaba, notificamos al Módulo 3
+        if estado_anterior != "LISTO" and instance.estado == "LISTO":
+            notificar_modulo3_pedido_listo(instance)
+
         return Response(PedidoSerializer(instance).data)
+
 
     # -------- FILTRO POR ESTADO --------
     @action(detail=False, methods=['get'])
@@ -63,6 +114,48 @@ class PedidoViewSet(viewsets.ModelViewSet):
     def entregados(self, request):
         pedidos = Pedido.objects.filter(estado="ENTREGADO")
         return Response(PedidoSerializer(pedidos, many=True).data)
+
+@api_view(["POST"])
+def recibir_pedido_modulo3(request):
+
+    """
+    Endpoint de entrada para pedidos provenientes del Módulo 3.
+
+    """
+
+    data = request.data
+
+    # Datos esperados (ejemplo):
+    # {
+    #   "id_pedido": "uuid-del-modulo3",
+    #   "mesa": 7,
+    #   "cliente": "Juan Pérez",
+    #   "orden": "2x Hamburguesa, 1x Coca-Cola",
+    #   "fecha_creacion": "2025-12-11T18:30:00Z",
+    #   "estado": "CREADO"
+    # }
+
+    mesa = data.get("mesa")
+    cliente = data.get("cliente")
+    orden = data.get("orden")
+
+    if mesa is None or not cliente or not orden:
+        return Response(
+            {"error": "Faltan campos obligatorios: mesa, cliente u orden."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Creamos el pedido en tu BD del Módulo 4
+    pedido = Pedido.objects.create(
+        mesa=mesa,
+        cliente=cliente,
+        descripcion=orden,
+        estado=Pedido.EstadoPedido.CREADO
+    )
+
+    serializer = PedidoSerializer(pedido)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 def detalle_pedido(request, pedido_id):
     pedido = get_object_or_404(Pedido, pk=pedido_id)
