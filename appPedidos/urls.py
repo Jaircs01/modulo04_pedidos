@@ -6,7 +6,6 @@ router = routers.DefaultRouter()
 router.register(r'pedidos', PedidoViewSet, basename='pedido')
 
 urlpatterns = [
-    path('', include(router.urls)),
     path('pedidos/desde-modulo3/', recibir_pedido_modulo3, name='recibir-pedido-modulo3'),
-
+    path('', include(router.urls)),
 ]
